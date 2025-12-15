@@ -55,9 +55,9 @@ class MapRegistry:
 
     def map_input(self, dtype: str) -> Dict[str, Any]:
         tm = self.conf.get(CONF_TYPE_MAPPING) or {}
-        return tm.get(dtype, tm.get("default", {"device_class":"problem","state_property":"state",
-                                                "true_values":["ALARM","ON",True],
-                                                "false_values":["NORMAL","OFF",False]}))
+        return tm.get(dtype, tm.get("default", {"device_class":"opening","state_property":"state",
+                                                "true_values":[True, "OPEN", "ON", 1],
+                                                "false_values":[False, "CLOSED", "OFF", 0]}))
 
     def map_output(self, dtype: str) -> Dict[str, Any]:
         om = self.conf.get(CONF_OUTPUT_MAPPING) or {}

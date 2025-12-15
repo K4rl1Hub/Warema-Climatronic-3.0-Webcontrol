@@ -45,7 +45,7 @@ class MapBinarySensor(BinarySensorEntity):
             else:
                 self._attr_device_class = mapping.get("device_class", "opening")
         else:
-            self._attr_device_class = mapping.get("device_class", "problem")
+            self._attr_device_class = mapping.get("device_class", "opening")
 
         reg.async_add_listener(self._on_update)
 

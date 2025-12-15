@@ -18,7 +18,7 @@ DEFAULT_INPUT_MAPPING_JSON = json.dumps({
   "BATTERY": {"device_class": "battery", "state_property": "state", "true_values": ["LOW", True], "false_values": ["OK", False]},
   "BATTERYCHARGER": {"device_class": "battery_charging", "state_property": "state", "true_values": ["CHARGING", True], "false_values": ["IDLE", False]},
   "POINT.LSNEXPANDER": {"device_class": "opening", "state_property": "open", "true_values": [True, "OPEN", "ON", 1], "false_values": [False, "CLOSED", "OFF", 0]},
-  "default": {"device_class": "problem", "state_property": "state", "true_values": ["ALARM", "ON", True], "false_values": ["NORMAL", "OFF", False]},
+  "default": {"device_class": "opening", "state_property": "open", "true_values": [True, "OPEN", "ON", 1], "false_values": [False, "CLOSED", "OFF", 0]},
 }, ensure_ascii=False)
 
 DEFAULT_OUTPUT_MAPPING_JSON = json.dumps({
