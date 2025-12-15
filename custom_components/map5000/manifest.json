@@ -1,0 +1,11 @@
+
+{
+  "domain": "map5000",
+  "name": "Bosch MAP5000 OII",
+  "version": "0.2.0",
+  "documentation": "https://example.local/docs/map5000",
+  "requirements": ["httpx==0.27.0"],
+  "codeowners": ["@michael-wentzler"],
+  "iot_class": "local_push",
+  "config_flow": true
+}
