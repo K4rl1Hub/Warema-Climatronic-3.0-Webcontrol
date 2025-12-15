@@ -39,7 +39,9 @@ class MapBinarySensor(BinarySensorEntity):
             if "Tür" in nm:
                 self._attr_device_class = "door"
             elif "Fenster" in nm:
-                self._attr_device_class = "window" 
+                self._attr_device_class = "window"
+            elif "RK" in nm:
+                self._attr_device_class = "lock"
             else:
                 self._attr_device_class = mapping.get("device_class", "opening")
         else:
