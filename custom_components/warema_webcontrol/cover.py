@@ -54,6 +54,14 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         if cause:
             self._last_cause = cause.get("cliausl")
         return self._position
+    
+    
+    @property
+    def is_closed(self):
+        """Return if the cover is closed."""
+        if self    if self._position is None:
+            return None
+
 
     @property
     def extra_state_attributes(self):
