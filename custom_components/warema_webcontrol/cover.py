@@ -13,7 +13,7 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
     )
     _attr_should_poll = False
 
-    def __init__(self, client, ch):
+    def __init__(self, hass: HomeAssistant, client, coordinator, ch):
         super().__init__(coordinator)
         self._client = client
         self._ch = ch

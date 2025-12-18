@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 import logging
+from datetime import timedelta
+
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers import discovery
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .webcontrol_client import WebControlClient
-from .const import DOMAIN, CONF_BASE_URL
+from .webcontrol_client import WebControlClient, ChannelInfo
+from .const import DOMAIN, CONF_BASE_URL, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["cover", "light", "switch", "binary_sensor", "sensor"]
@@ -17,7 +20,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     base_url = entry.data[CONF_BASE_URL]
     scan_seconds = entry.options.get(CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
 
-    client = WebControlClient(base_url=base_url, timeout=5
+    client = WebControlClient(base_url=base_url, timeout=5)
 
 
     # Initialisierung im Threadpool (blockiert sonst)
