@@ -73,6 +73,9 @@ class WebControlClient:
         self.clima_check_erfolg: Optional[int] = None
         self.abwesend: Optional[bool] = None
         self.automatik: Optional[bool] = None
+        # Ensure caches exist for coordinator
+        self.state_cache: Dict[Tuple[int,int], Dict[str,int]] = {}
+        self.cause_cache: Dict[int, Dict[str,int]] = {}
 
     # ---------- low-level helpers ----------
     @staticmethod
