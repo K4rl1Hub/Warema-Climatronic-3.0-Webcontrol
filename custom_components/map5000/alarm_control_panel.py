@@ -44,7 +44,9 @@ class MapAlarmPanel(AlarmControlPanelEntity):
 
     @callback
     def _on_update(self, siid, payload):
-        
+        res = payload.get("resource") or {}
+        self_link = res.get("@self", "")
+
         self._attrs = getattr(self, "_attrs", {})
         self._attrs["siid"] = self._siid
         self_link = res.get("@self")
@@ -59,15 +61,19 @@ class MapAlarmPanel(AlarmControlPanelEntity):
         if isinstance(self_link,str) and self_link.startswith("/inc/"):
             parts=self_link.split("/")
             if len(parts)>=3 and parts[2]==self._siid:
-                if payload.get("etype")=="CREATED": self._state="triggered"
-                elif payload.get("etype")=="DELETED": pass
+                if payload.get("etype")=="CREATED":
+                    self._state="triggered"
+                elif payload.get("etype")=="DELETED":
+                    pass
                 self.async_write_ha_state()
                 return
         # area state
         if siid==self._siid or (isinstance(self_link,str) and self_link.endswith(self._siid)):
             armed = res.get("armed")
-            if armed is True: self._state="armed_home"
-            elif armed is False: self._state="disarmed"
+            if armed is True: 
+                self._state="armed_home"
+            elif armed is False: 
+                self._state="disarmed"
             self.async_write_ha_state()
 
     async def async_alarm_disarm(self, code=None):
