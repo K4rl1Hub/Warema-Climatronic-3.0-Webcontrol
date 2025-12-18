@@ -1,5 +1,5 @@
 from __future__ import annotations
-from homeassistant.components.light import LightEntity
+from homeassistant.components.light import LightEntity, ColorMode
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -8,6 +8,8 @@ from . import DOMAIN
 
 class WebControlLight(CoordinatorEntity, LightEntity):
     _attr_should_poll = False
+    _attr_supported_color_modes = {ColorMode.ONOFF}
+    _attr_color_mode = ColorMode.ONOFF
 
     def __init__(self, hass: HomeAssistant, client, coordinator, ch):
         super().__init__(coordinator)
