@@ -1,8 +1,10 @@
 from __future__ import annotations
 import requests
 import xml.etree.ElementTree as ET
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+from threading import Lock
 
 @dataclass
 class ChannelInfo:
@@ -39,7 +41,8 @@ class WebControlClient:
     # RES (ResponseIDs)
     RES_RAUM_ABFRAGEN = 4
     RES_KANALBEDIENUNG = 30
-    RES_POLLING = 30
+    RES_POLLING = 40
+    RES_CLIMA_COM_BUSY = 41
     RES_SPRACHE = 52
     RES_CLIMATRONIC_KANAL_ABFRAGEN = 60
     RES_CHECK_CLIMA_DATA = 62
@@ -68,6 +71,8 @@ class WebControlClient:
         self.timeout = timeout
         self._counter = 0
         # init status
+        self._lock = Lock()
+        self._session = requests.Session()
         self.language: Optional[int] = None
         self.sommer_winter_aktiv: Optional[int] = None
         self.clima_check_erfolg: Optional[int] = None
@@ -90,33 +95,67 @@ class WebControlClient:
     def _build_message(self, payload_bytes: List[int]) -> Tuple[str, int]:
         if not (1 <= len(payload_bytes) <= self.PAYLOADLENGTH_MAX):
             raise ValueError("Payload-Länge außerhalb des gültigen Bereichs")
-        header = [self.BEFEHLSCODE, self._next_counter(), len(payload_bytes)]
+        header_counter = self._next_counter()
+        header = [self.BEFEHLSCODE, header_counter, len(payload_bytes)]
         full = header + payload_bytes
-        return self._to_hex(full), header[1]
+        return self._to_hex(full), header_counter
 
     def _http_get(self, hex_string: str) -> str:
         url = f"{self.base_url}/protocol.xml"
-        r = requests.get(url, params={"protocol": hex_string}, timeout=self.timeout)
+        r = self._session.get(url, params={"protocol": hex_string}, timeout=self.timeout)
+        #r = requests.get(url, params={"protocol": hex_string}, timeout=self.timeout)
         r.raise_for_status()
         return r.text
 
+    def _send(self, payload: List[int], max_retries: int = 3, backoff_sec: float = 0.15) -> ET.Element:
+        """Threadsicher senden + einfache Busy/Counter-Validierung.
+        Liefert XML-Root-Element.
+        """
+        with self._lock:
+            for attempt in range(max_retries):
+                hex_msg, cnt = self._build_frame(payload)
+                xml_text = self._http_get(hex_msg)
+                root = ET.fromstring(xml_text)
+                # Busy behandeln: responseID==RES_BUSY → kurz warten und erneut
+                rid_el = root.find("responseID")
+                if rid_el is not None:
+                    try:
+                        rid = int(rid_el.text)
+                    except Exception:
+                        rid = None
+                else:
+                    rid = None
+
+                # Counter validieren, wenn vorhanden
+                cz_el = root.find("befehlszaehler")
+                try:
+                    cz = int(cz_el.text) if cz_el is not None else None
+                except Exception:
+                    cz = None
+
+                if rid == self.RES_BUSY:
+                    time.sleep(backoff_sec)
+                    continue
+                if cz is not None and cz != cnt:
+                    # Gateway hat anderen Zähler gespiegelt → erneut senden
+                    time.sleep(backoff_sec)
+                    continue
+                # OK
+                return root
+            # Alle Versuche durch: letztes Root zurückgeben (oder Fehler werfen)
+            return root
+
     # ---------- single command helpers ----------
     def set_language_query(self) -> str:
-        payload = [self.TEL_SPRACHE, 255]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_SPRACHE, 255])
         rid_el = root.find("responseID")
         if rid_el is not None and int(rid_el.text) == self.RES_SPRACHE:
             el = root.find("sprache")
             self.language = int(el.text) if el is not None else None
-        return xml
+        return ET.tostring(root, encoding='unicode')
 
     def query_clima_block(self, start_index: int) -> List[ChannelInfo]:
-        payload = [self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
         rid_el = root.find("responseID")
         if rid_el is None or int(rid_el.text) != self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
             return []
@@ -153,34 +192,25 @@ class WebControlClient:
         return all_channels
 
     def query_sommer_winter_aktiv(self) -> str:
-        payload = [self.TEL_SOMMER_WINTER_AKTIV]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_SOMMER_WINTER_AKTIV])
         rid_el = root.find("responseID")
         if rid_el is not None and int(rid_el.text) == self.RES_SOMMER_WINTER_AKTIV:
             winter_el = root.find("winterakt")
             self.sommer_winter_aktiv = int(winter_el.text) if winter_el is not None else None
-        return xml
+        return ET.tostring(root, encoding='unicode')
 
     def check_clima_data(self) -> str:
-        payload = [self.TEL_CHECK_CLIMA_DATA]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_CHECK_CLIMA_DATA])
         rid_el = root.find("responseID")
         if rid_el is not None and int(rid_el.text) == self.RES_CHECK_CLIMA_DATA:
             erfolg_el = root.find("erfolg")
             self.clima_check_erfolg = int(erfolg_el.text) if erfolg_el is not None else None
-        return xml
+        return ET.tostring(root, encoding='unicode')
 
     def load_rooms_matrix(self, max_rooms: int = DEF_MAXRAUM) -> Dict[int, Tuple[int,int]]:
         mapping: Dict[int, Tuple[int,int]] = {}
         for r in range(0, max_rooms):
-            payload = [self.TEL_RAUM_ABFRAGEN, r]
-            hex_msg, _ = self._build_message(payload)
-            xml = self._http_get(hex_msg)
-            root = ET.fromstring(xml)
+            root = self._send([self.TEL_RAUM_ABFRAGEN, r])
             rid_el = root.find("responseID")
             if rid_el is None or int(rid_el.text) != self.RES_RAUM_ABFRAGEN:
                 break
@@ -221,10 +251,7 @@ class WebControlClient:
     
     # ---------- Polling ----------
     def poll(self, raumindex: int, kanalindex: int) -> Optional[Dict[str,int]]:
-        payload = [self.TEL_POLLING, raumindex, kanalindex, 0]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_POLLING, raumindex, kanalindex, 0])
         rid_el = root.find("responseID")
         if rid_el is None or int(rid_el.text) != self.RES_POLLING:
             return None
@@ -242,10 +269,7 @@ class WebControlClient:
 
     # ---------- Auslöser ----------
     def read_ausloeser(self, raumindex: int, kanalindex: int, cli_index: int) -> Optional[Dict[str,int]]:
-        payload = [self.TEL_AUSLOESER, raumindex, kanalindex, cli_index]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_AUSLOESER, raumindex, kanalindex, cli_index])
         rid_el = root.find("responseID")
         if rid_el is None or int(rid_el.text) != self.RES_AUSLOESER:
             return None
@@ -267,9 +291,8 @@ class WebControlClient:
             winkel = (65535 + winkel + 1)
         hi = (winkel - (winkel % 256)) // 256
         lo = winkel % 256
-        payload = [self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo]
-        hex_msg, _ = self._build_message(payload)
-        return self._http_get(hex_msg)
+        root = self._send([self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo])
+        return ET.tostring(root, encoding='unicode')
 
     def cover_set_position(self, ch: ChannelInfo, percent: int) -> str:
         if ch.raumindex is not None and ch.kanalindex is not None:
@@ -300,10 +323,7 @@ class WebControlClient:
     # Switches (global): Abwesend & Automatik
     def set_abwesend(self, enabled: bool) -> Optional[bool]:
         # Annahme: TEL_ABWESEND mit Parameter 1/0
-        payload = [self.TEL_ABWESEND, 1 if enabled else 0]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_ABWESEND, 1 if enabled else 0])
         rid_el = root.find("responseID")
         if rid_el is not None and int(rid_el.text) == self.RES_ABWESEND:
             self.abwesend = enabled
@@ -311,10 +331,7 @@ class WebControlClient:
         return None
 
     def set_automatik(self, enabled: bool) -> Optional[bool]:
-        payload = [self.TEL_AUTOMATIK, 1 if enabled else 0]
-        hex_msg, _ = self._build_message(payload)
-        xml = self._http_get(hex_msg)
-        root = ET.fromstring(xml)
+        root = self._send([self.TEL_AUTOMATIK, 1 if enabled else 0])
         rid_el = root.find("responseID")
         if rid_el is not None and int(rid_el.text) == self.RES_AUTOMATIK:
             self.automatik = enabled
