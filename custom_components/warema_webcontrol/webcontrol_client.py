@@ -133,7 +133,7 @@ class WebControlClient:
                 except Exception:
                     cz = None
 
-                if rid == self.RES_BUSY:
+                if rid == self.RES_CLIMA_COM_BUSY:
                     time.sleep(backoff_sec)
                     continue
                 if cz is not None and cz != cnt:
