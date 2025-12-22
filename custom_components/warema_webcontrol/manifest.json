@@ -1,6 +1,6 @@
 {
   "domain": "warema_webcontrol",
-  "name": "Warema WebControl",
+  "name": "Warema climatronic 3.0 WebControl",
   "version": "0.2.0",
   "documentation": "https://example.local/docs/warema",
   "iot_class": "local_polling",
