@@ -11,7 +11,6 @@ from .const import (
     DOMAIN,
     CONF_BASE_URL,
     CONF_SCAN_INTERVAL,
-    DEFAULT_BASE_URL,
     DEFAULT_SCAN_INTERVAL,
 )
 from .webcontrol_client import WebControlClient
@@ -48,7 +47,7 @@ class WebControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
 
         schema = vol.Schema({
-            vol.Required(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
+            vol.Required(CONF_BASE_URL,): str,
             vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
         })
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
