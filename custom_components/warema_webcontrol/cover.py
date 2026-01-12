@@ -21,7 +21,7 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         self._ch = ch
         self._attr_name = ch.name or f"Rollladen {ch.cli_index}"
         self._attr_unique_id = f"webcontrol_cover_{ch.cli_index}"
-        self._attr_device_class = WAREMA_TO_HA_DEVICE_CLASS.get(ch.gerätetyp, "shutter")
+        self._attr_device_class = WAREMA_TO_HA_DEVICE_CLASS.get(ch.type, "shutter")
         self._position = None
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, "webcontrol")}, name="Warema WebControl"
