@@ -51,8 +51,12 @@ class WebControlClient:
     RES_AUTOMATIK = 38
     RES_AUSLOESER = 74
 
-    # Produkt-Typen (aus WebControl.js – für unsere Nutzung nur 3 & 12)
+    # Produkt-Typen (aus WebControl.js – für unsere Nutzung nur 2,3,4,5 & 12)
+    TYPE_RAFFSTORE = 2
     TYPE_ROLLLADEN = 3
+    TYPE_FALTSTORE = 4
+    TYPE_JALOUSIE = 5
+
     TYPE_LICHT = 12
     TYPE_INVALID = 255
 
@@ -234,7 +238,7 @@ class WebControlClient:
         for ch in valid:
             if ch.cli_index in cli_to_roomchan:
                 ch.raumindex, ch.kanalindex = cli_to_roomchan[ch.cli_index]
-        cover_types = { self.TYPE_ROLLLADEN }
+        cover_types = { self.TYPE_RAFFSTORE, self.TYPE_ROLLLADEN, self.TYPE_FALTSTORE, self.TYPE_JALOUSIE }
         light_types = { self.TYPE_LICHT }
         mapped = {
             "cover":  [ch for ch in valid if ch.type in cover_types and ch.raumindex is not None],
