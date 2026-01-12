@@ -14,6 +14,7 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         CoverEntityFeature.STOP | CoverEntityFeature.SET_POSITION
     )
     _attr_should_poll = False
+    _history_max = 20  # max number of history entries to keep
 
     def __init__(self, hass: HomeAssistant, client, coordinator, ch):
         super().__init__(coordinator)
@@ -65,8 +66,8 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
 
 
     def _determine_source(self) -> str:
-        # Minimalheuristik: Wenn ein User-Kontext existiert → "ui", sonst "service".
-        # Bei Automationen setzt HA i. d. R. parent_id → hier vereinfachen wir bewusst.
+        # If user context exists → "ui", else "service".
+        # for automation calls HA usually sets parent_id → we simplify here on purpose.
         try:
             ctx = self.hass.context
             if ctx and getattr(ctx, "user_id", None):
