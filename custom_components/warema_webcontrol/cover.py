@@ -37,31 +37,31 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
 
 
 
-    async def async_open_cover(self, **kwargs):
+    def open_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("open", self._determine_source())
         self.async_write_ha_state()
-        await self._client.cover_open(self._ch)
+        self._client.cover_open(self._ch)
 
-    async def async_close_cover(self, **kwargs):
+    def close_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("close", self._determine_source())
         self.async_write_ha_state()
-        await self._client.cover_close(self._ch)
+        self._client.cover_close(self._ch)
 
-    async def async_stop_cover(self, **kwargs):
+    def stop_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("stop", self._determine_source())
         self.async_write_ha_state()
-        await self._client.cover_stop(self._ch)
+        self._client.cover_stop(self._ch)
 
-    async def asnyc_set_cover_position(self, **kwargs):
+    def set_cover_position(self, **kwargs):
         pos = kwargs.get("position")
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("set_position", self._determine_source(), {"position": pos})
         self.async_write_ha_state()
         if pos is not None:
-            await self._client.cover_set_position(self._ch, int(pos))
+            self._client.cover_set_position(self._ch, int(pos))
             self._position = int(pos)
 
 
