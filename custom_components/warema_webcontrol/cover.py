@@ -40,26 +40,26 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
     def open_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("open", self._determine_source())
-        self.async_write_ha_state()
+        self.schedule_update_ha_state()
         self._client.cover_open(self._ch)
 
     def close_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("close", self._determine_source())
-        self.async_write_ha_state()
+        self.schedule_update_ha_state()
         self._client.cover_close(self._ch)
 
     def stop_cover(self, **kwargs):
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("stop", self._determine_source())
-        self.async_write_ha_state()
+        self.schedule_update_ha_state()
         self._client.cover_stop(self._ch)
 
     def set_cover_position(self, **kwargs):
         pos = kwargs.get("position")
         self._assumed_state = True # we assume it works, no API feedback
         self._push_history("set_position", self._determine_source(), {"position": pos})
-        self.async_write_ha_state()
+        self.schedule_update_ha_state()
         if pos is not None:
             self._client.cover_set_position(self._ch, int(pos))
             self._position = int(pos)
@@ -138,7 +138,7 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
     async_add_entities(entities)
 
 async def async_update(self):
-    data = await self._client.poll_state(self._room_index, self._ch.kanalindex)
+    data = self._client.poll_state(self._room_index, self._ch.kanalindex)
     self._assumed_state = False # since we just polled the real state
     self._command_source = "poll_inferred"
     self.async_write_ha_state()
