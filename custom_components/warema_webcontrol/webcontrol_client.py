@@ -178,48 +178,57 @@ class WebControlClient:
             result["busy"] = True
         return result
 
-    def _http_get(self, hex_string: str) -> str:
+    def _http_get(self, hex_string: str) -> dict:
         url = f"{self.base_url}/protocol.xml"
         r = self._session.get(url, params={"protocol": hex_string}, timeout=self.timeout)
         r.raise_for_status()
         return self._parse_xml_response(r.text)
 
-    def _send(self, payload: List[int], max_retries: int = 3, backoff_sec: float = 0.15) -> ET.Element:
+    def _send(self, payload: List[int], max_retries: int = 3, backoff_sec: float = 1) -> Tuple(dict, int):
         """Threadsafe sending + easy busy/counter validation
-        returns the root element of the response XML
+        returns the parsed XML response as dict
         """
         with self._lock:
+            poll = False
             for attempt in range(max_retries):
-                hex_msg, cnt = self._build_message(payload)
-                response = self._http_get(hex_msg)
+                # in polling mode(gateway busy): send poll command
+                if poll:
+                    poll = False
+                    (response, cnt) = self.poll()
+                else:
+                    hex_msg, cnt = self._build_message(payload)
+                    response = self._http_get(hex_msg)
 
-                # handle busy: responseID == RES_BUSY → kurz warten und erneut
                 rid = response.get("responseID")
-
-                # Counter validieren, wenn vorhanden
                 cz = response.get("befehlszaehler")
 
-                if rid == self.RES_CLIMA_COM_BUSY:
-                    time.sleep(backoff_sec)
-                    continue
+                # Validate counter 
                 if cz is not None and cz != cnt:
-                    # Gateway hat anderen Zähler gespiegelt → erneut senden
+                    # Gateway returned different counter -> try again
                     time.sleep(backoff_sec)
                     continue
+
+                if rid == self.RES_CLIMA_COM_BUSY:
+                    if response.get("requestid") == payload[0] and response.get("feedback") == 1:
+                        # Gateway busy, start polling
+                        time.sleep(backoff_sec)
+                        poll = True
+                        continue
+
                 # OK
-                return response
+                return response, cnt
             # Alle Versuche durch: letztes Response zurückgeben (oder Fehler werfen)
-            return response
+            return response, cnt
 
     # ---------- single command helpers ----------
-    def set_language_query(self) -> str:
-        response = self._send([self.TEL_SPRACHE, 255])
+    def set_language_query(self) -> dict:
+        (response, cnt) = self._send([self.TEL_SPRACHE, 255])
         if response.get("ok") and response.get("responseID") == self.RES_SPRACHE:
             self.language = response.get("sprache")
         return response
 
     def query_clima_block(self, start_index: int) -> List[ChannelInfo]:
-        response = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
+        (response, cnt) = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
         if not response.get("ok") or response.get("responseID") == self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
             return []
         names   = response.get("kanalname", [])
@@ -254,15 +263,15 @@ class WebControlClient:
             all_channels.extend(block)
         return all_channels
 
-    def query_sommer_winter_aktiv(self) -> str:
-        response = self._send([self.TEL_SOMMER_WINTER_AKTIV])
+    def query_sommer_winter_aktiv(self) -> dict:
+        (response, cnt) = self._send([self.TEL_SOMMER_WINTER_AKTIV])
         if response.get("ok") and response.get("responseID") == self.RES_SOMMER_WINTER_AKTIV:
             winter = response.get("winterakt")
             self.sommer_winter_aktiv = winter if winter is not None else None
         return response
 
-    def check_clima_data(self) -> str:
-        response = self._send([self.TEL_CHECK_CLIMA_DATA])
+    def check_clima_data(self) -> dict:
+        (response, cnt) = self._send([self.TEL_CHECK_CLIMA_DATA])
         if response.get("ok") and response.get("responseID") == self.RES_CHECK_CLIMA_DATA:
             erfolg = response.get("erfolg")
             self.clima_check_erfolg = erfolg if erfolg is not None else None
@@ -271,7 +280,7 @@ class WebControlClient:
     def load_rooms_matrix(self, max_rooms: int = DEF_MAXRAUM) -> Dict[int, Tuple[int,int]]:
         mapping: Dict[int, Tuple[int,int]] = {}
         for r in range(0, max_rooms):
-            response = self._send([self.TEL_RAUM_ABFRAGEN, r])
+            (response, cnt) = self._send([self.TEL_RAUM_ABFRAGEN, r])
             if not response.get("ok") and response.get("responseID") != self.RES_RAUM_ABFRAGEN:
                 break
             raumname = response.get("raumname", "")
@@ -309,10 +318,8 @@ class WebControlClient:
         }
     
     # ---------- Polling ----------
-    def poll(self, raumindex: int, kanalindex: int) -> Optional[Dict[str,int]]:
-        response = self._send([self.TEL_POLLING, raumindex, kanalindex, 0])
-        if not response.get("ok") and response.get("responseID") != self.RES_POLLING:
-            return None
+    def poll(self, raumindex: int, kanalindex: int) -> Tuple(dict, int):
+        (response, cnt) = self._send([self.TEL_POLLING, raumindex, kanalindex, 0])
 
         st = {
             "raumindex": response.get("raumindex"),
@@ -321,11 +328,11 @@ class WebControlClient:
             "lastw": response.get("lastw")
         }
         self.state_cache[(raumindex, kanalindex)] = st
-        return st
+        return (response, cnt)
 
     # ---------- Auslöser ----------
     def read_ausloeser(self, raumindex: int, kanalindex: int, cli_index: int) -> Optional[Dict[str,int]]:
-        response = self._send([self.TEL_AUSLOESER, raumindex, kanalindex, cli_index])
+        (response, cnt) = self._send([self.TEL_AUSLOESER, raumindex, kanalindex, cli_index])
         if not response.get("ok") and response.get("responseID") != self.RES_AUSLOESER:
             return None
         
@@ -339,51 +346,62 @@ class WebControlClient:
         return data
     
     # Bedienungen
-    def _channel_command(self, raumindex: int, kanalindex: int, fc: int, pos: int, winkel: int) -> str:
+    def _channel_command(self, raumindex: int, kanalindex: int, fc: int, pos: int, winkel: int) -> dict:
         if winkel != self.INVALID_WINKEL and winkel < 0:
             winkel = (65535 + winkel + 1)
         hi = (winkel - (winkel % 256)) // 256
         lo = winkel % 256
-        response = self._send([self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo])
+        (response, cnt) = self._send([self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo])
+
+        if response.get("ok") and response.get("responseID") == self.RES_KANALBEDIENUNG:
+            # Aktualisiere Cache
+            st = {
+                "raumindex": response.get("raumindex"),
+                "kanalindex": response.get("kanalindex"),
+                "lastp": response.get("lastp"),
+                "lastw": response.get("lastw")
+            }
+            self.state_cache[(response.get("raumindex"), response.get("kanalindex"))] = st
+
         return response
 
-    def cover_set_position(self, ch: ChannelInfo, percent: int) -> str:
+    def cover_set_position(self, ch: ChannelInfo, percent: int) -> dict:
         if ch.raumindex is not None and ch.kanalindex is not None:
             self.read_ausloeser(ch.raumindex, ch.kanalindex, ch.cli_index)
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_STATE, int(percent), self.INVALID_WINKEL)
 
-    def cover_open(self, ch: ChannelInfo) -> str:
+    def cover_open(self, ch: ChannelInfo) -> dict:
         if ch.raumindex is not None and ch.kanalindex is not None:
             self.read_ausloeser(ch.raumindex, ch.kanalindex, ch.cli_index)
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_HOCH, 0, 0)
 
-    def cover_close(self, ch: ChannelInfo) -> str:
+    def cover_close(self, ch: ChannelInfo) -> dict:
         if ch.raumindex is not None and ch.kanalindex is not None:
             self.read_ausloeser(ch.raumindex, ch.kanalindex, ch.cli_index)
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_TIEF, 0, 0)
 
-    def cover_stop(self, ch: ChannelInfo) -> str:
+    def cover_stop(self, ch: ChannelInfo) -> dict:
         if ch.raumindex is not None and ch.kanalindex is not None:
             self.read_ausloeser(ch.raumindex, ch.kanalindex, ch.cli_index)
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_STOP, 0, self.INVALID_WINKEL)
 
-    def light_on(self, ch: ChannelInfo) -> str:
+    def light_on(self, ch: ChannelInfo) -> dict:
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_STATE, 100, self.INVALID_WINKEL)
 
-    def light_off(self, ch: ChannelInfo) -> str:
+    def light_off(self, ch: ChannelInfo) -> dict:
         return self._channel_command(ch.raumindex, ch.kanalindex, self.FC_STOP, 0, self.INVALID_WINKEL)
 
     # Switches (global): Abwesend & Automatik
     def set_abwesend(self, enabled: bool) -> Optional[bool]:
         # Annahme: TEL_ABWESEND mit Parameter 1/0
-        response = self._send([self.TEL_ABWESEND, 1 if enabled else 0])
+        (response, cnt) = self._send([self.TEL_ABWESEND, 1 if enabled else 0])
         if response.get("ok") and response.get("responseID") == self.RES_ABWESEND:
             self.abwesend = enabled
             return self.abwesend
         return None
 
     def set_automatik(self, enabled: bool) -> Optional[bool]:
-        response = self._send([self.TEL_AUTOMATIK, 1 if enabled else 0])
+        (response, cnt) = self._send([self.TEL_AUTOMATIK, 1 if enabled else 0])
         if response.get("ok") and response.get("responseID") == self.RES_AUTOMATIK:
             self.automatik = enabled
             return self.automatik

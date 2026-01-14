@@ -29,69 +29,52 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         )
         self._last_cause = None  # cliausl Code
 
-        self._history = []
         self._last_triggered = None
         self._last_command = None
-        self._command_source = None
-        self._assumed_state = False
+        self._last_direction = None
 
 
 
     def open_cover(self, **kwargs):
-        self._assumed_state = True # we assume it works, no API feedback
-        self._push_history("open", self._determine_source())
+        self._direction = "opening"
+        self._is_moving = True
+        self._last_command = "open"
+        self._push_history(self._direction)
         self.schedule_update_ha_state()
         self._client.cover_open(self._ch)
 
     def close_cover(self, **kwargs):
-        self._assumed_state = True # we assume it works, no API feedback
-        self._push_history("close", self._determine_source())
+        self._direction = "closing"
+        self._is_moving = True
+        self._last_command = "close"
+        self._push_history()
         self.schedule_update_ha_state()
         self._client.cover_close(self._ch)
 
     def stop_cover(self, **kwargs):
-        self._assumed_state = True # we assume it works, no API feedback
-        self._push_history("stop", self._determine_source())
+        self._direction = "closing"
+        self._is_moving = False
+        self._last_command = "stop"
+        self._push_history()
         self.schedule_update_ha_state()
         self._client.cover_stop(self._ch)
 
     def set_cover_position(self, **kwargs):
         pos = kwargs.get("position")
-        self._assumed_state = True # we assume it works, no API feedback
-        self._push_history("set_position", self._determine_source(), {"position": pos})
+        self._direction = "closing" if pos > self._position else "opening"
+        self._is_moving = True
+        self._last_command = f"set_position {pos}"
+        self._push_history()
         self.schedule_update_ha_state()
         if pos is not None:
             self._client.cover_set_position(self._ch, int(pos))
             self._position = int(pos)
 
 
-    def _determine_source(self) -> str:
-        # If user context exists → "ui", else "service".
-        # for automation calls HA usually sets parent_id → we simplify here on purpose.
-        try:
-            ctx = self.hass.context
-            if ctx and getattr(ctx, "user_id", None):
-                return "ui"
-        except Exception:
-            pass
-        return "service"
+    def _push_history(self) -> None:
+        self._last_direction = self._direction
+        self._last_triggered = dt_util.utcnow().isoformat(timespec="seconds")
 
-
-    def _push_history(self, command: str, source: str, value: dict | None = None) -> None:
-        entry = {
-            "ts": dt_util.utcnow().isoformat(timespec="seconds"),
-            "command": command,
-            "source": source,
-            "value": value or {},
-        }
-        hist = getattr(self, "_history", [])
-        hist.append(entry)
-        if len(hist) > self._history_max:
-            hist.pop(0)
-        self._history = hist
-        self._last_triggered = entry["ts"]
-        self._last_command = command
-        self._command_source = source
     
     @property
     def current_cover_position(self):
@@ -109,10 +92,19 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
     
     
     @property
-    def is_closed(self):
+    def is_closing(self) -> bool | None:
+        return bool(getattr(self, "_is_moving", False)) and getattr(self, "_direction", None) == "closing"
+    
+    @property
+    def is_opening(self) -> bool | None:
+        return bool(getattr(self, "_is_moving", False)) and getattr(self, "_direction", None) == "opening"
+    
+    @property
+    def is_closed(self) -> bool | None:
         """Return if the cover is closed."""
-        if self._position is None:
-            return None
+        pos = getattr(self, "_position", None)
+        return None if pos is None else pos == 0
+        
 
 
     @property
@@ -120,9 +112,7 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         attrs = {
             "last_triggered": getattr(self, "_last_triggered", None),
             "last_command": getattr(self, "_last_command", None),
-            "command_source": getattr(self, "_command_source", None),
-            "history": getattr(self, "_history", []),
-            "assumed_state": getattr(self, "_assumed_state", False),
+            "last_direction": getattr(self, "_last_direction", None),
         }
         if self._last_cause is not None:
             attrs["last_cause_code"] = self._last_cause
@@ -139,6 +129,11 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
 
 async def async_update(self):
     data = self._client.poll_state(self._room_index, self._ch.kanalindex)
-    self._assumed_state = False # since we just polled the real state
-    self._command_source = "poll_inferred"
+    if data:
+        pos = data.get("lastp")
+        if pos is not None:
+            self._position = int(pos // 2)
+        cause = self._client.cause_cache.get(self._ch.cli_index)
+        if cause:
+            self._last_cause = cause.get("cliausl")
     self.async_write_ha_state()
