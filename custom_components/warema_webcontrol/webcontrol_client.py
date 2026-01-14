@@ -191,14 +191,18 @@ class WebControlClient:
         """
         with self._lock:
             poll = False
+            ridx = 0
+            kidx = 0
             for attempt in range(max_retries):
                 # in polling mode(gateway busy): send poll command
                 if poll:
                     poll = False
-                    (response, cnt) = self.poll()
-                else:
-                    hex_msg, cnt = self._build_message(payload)
-                    response = self._http_get(hex_msg)
+                    payload = [self.TEL_POLLING, ridx, kidx, 0]
+                    ridx = 0
+                    kidx = 0
+                
+                hex_msg, cnt = self._build_message(payload)
+                response = self._http_get(hex_msg)
 
                 rid = response.get("responseID")
                 cz = response.get("befehlszaehler")
@@ -214,6 +218,10 @@ class WebControlClient:
                         # Gateway busy, start polling
                         time.sleep(backoff_sec)
                         poll = True
+                        if len(payload) >= 1:
+                            if payload[0] == self.TEL_KANALBEDIENUNG and len(payload) >= 3:
+                                ridx = payload[1]
+                                kidx = payload[2]
                         continue
 
                 # OK
