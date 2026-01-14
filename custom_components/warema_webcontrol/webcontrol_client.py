@@ -104,38 +104,100 @@ class WebControlClient:
         full = header + payload_bytes
         return self._to_hex(full), header_counter
 
+    def _parse_xml_response(self, xml_text: str) -> dict:
+        """Parse Warema WebControl reponse XML: extract responseID + lastp (0..200)."""
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as e:
+            return {"ok": False, "error": f"xml_parse_error: {e}"}
+
+        def get_tag(*names: str) -> str | dict | None:
+            for n in names:
+                el = root.findall(n)
+                if el is not None and el is dict:
+                    ed = []
+                    for e in el:
+                        if e is not None and e.text is not None:
+                            ed.append(e.text.strip())
+                    return ed
+                if el is not None and el.text is not None:
+                    return el.text.strip()
+            return None
+        
+        xml_tags = {"responseID", 
+                    "befehlszaehler", 
+                    "requestid", 
+                    "feedback", 
+                    "raumindex", 
+                    "kanalindex", 
+                    "lastp", 
+                    "lastw", 
+                    "raumname"
+                    "clikanalindex",
+                    "cliausl",
+                    "erfolg",
+                    "sprache",
+                    "winterakt",
+                    "maxw",
+                    "minw",
+                    "produkttyp",
+                    "kanalname",
+                    "winakt"}        
+        
+        result = {"ok": True}
+
+        for xml_tag in xml_tags:
+            tag = get_tag(xml_tag)
+            if tag is not None:
+                if xml_tag in {"kanalname", "raumname"}:
+                    result.setdefault(xml_tag).append(tag)
+                else:
+                    if tag is dict:
+                        for t in tag:
+                            try:
+                                result.setdefault(xml_tag, []).append(int(t))
+                            except Exception:
+                                result.setdefault(xml_tag, []).append(None)
+                    else:
+                        try:
+                            result.setdefault(xml_tag).append(int(tag))
+                        except Exception:
+                            result.setdefault(xml_tag).append(None)
+            else:
+                result.setdefault(xml_tag).append(None)
+        
+        if result.get("responseID") is None:
+            result["ok"] = False
+            result["error"] = "missing or empty befehlszaehler"
+
+        if result.get("befehlszaehler") is None:
+            result["ok"] = False
+            result["error"] = "missing or empty befehlszaehler"
+
+        if result.get("responseID") == WebControlClient.RES_CLIMA_COM_BUSY:
+            result["busy"] = True
+        return result
+
     def _http_get(self, hex_string: str) -> str:
         url = f"{self.base_url}/protocol.xml"
         r = self._session.get(url, params={"protocol": hex_string}, timeout=self.timeout)
-        #r = requests.get(url, params={"protocol": hex_string}, timeout=self.timeout)
         r.raise_for_status()
-        return r.text
+        return self._parse_xml_response(r.text)
 
     def _send(self, payload: List[int], max_retries: int = 3, backoff_sec: float = 0.15) -> ET.Element:
-        """Threadsicher senden + einfache Busy/Counter-Validierung.
-        Liefert XML-Root-Element.
+        """Threadsafe sending + easy busy/counter validation
+        returns the root element of the response XML
         """
         with self._lock:
             for attempt in range(max_retries):
                 hex_msg, cnt = self._build_message(payload)
-                xml_text = self._http_get(hex_msg)
-                root = ET.fromstring(xml_text)
-                # Busy behandeln: responseID==RES_BUSY → kurz warten und erneut
-                rid_el = root.find("responseID")
-                if rid_el is not None:
-                    try:
-                        rid = int(rid_el.text)
-                    except Exception:
-                        rid = None
-                else:
-                    rid = None
+                response = self._http_get(hex_msg)
+
+                # handle busy: responseID == RES_BUSY → kurz warten und erneut
+                rid = response.get("responseID")
 
                 # Counter validieren, wenn vorhanden
-                cz_el = root.find("befehlszaehler")
-                try:
-                    cz = int(cz_el.text) if cz_el is not None else None
-                except Exception:
-                    cz = None
+                cz = response.get("befehlszaehler")
 
                 if rid == self.RES_CLIMA_COM_BUSY:
                     time.sleep(backoff_sec)
@@ -145,31 +207,28 @@ class WebControlClient:
                     time.sleep(backoff_sec)
                     continue
                 # OK
-                return root
-            # Alle Versuche durch: letztes Root zurückgeben (oder Fehler werfen)
-            return root
+                return response
+            # Alle Versuche durch: letztes Response zurückgeben (oder Fehler werfen)
+            return response
 
     # ---------- single command helpers ----------
     def set_language_query(self) -> str:
-        root = self._send([self.TEL_SPRACHE, 255])
-        rid_el = root.find("responseID")
-        if rid_el is not None and int(rid_el.text) == self.RES_SPRACHE:
-            el = root.find("sprache")
-            self.language = int(el.text) if el is not None else None
-        return ET.tostring(root, encoding='unicode')
+        response = self._send([self.TEL_SPRACHE, 255])
+        if response.get("ok") and response.get("responseID") == self.RES_SPRACHE:
+            self.language = response.get("sprache")
+        return response
 
     def query_clima_block(self, start_index: int) -> List[ChannelInfo]:
-        root = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
-        rid_el = root.find("responseID")
-        if rid_el is None or int(rid_el.text) != self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
+        response = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
+        if not response.get("ok") or response.get("responseID") == self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
             return []
-        names   = [el.text.strip() if el is not None and el.text else "" for el in root.findall("kanalname")]
-        types   = [int(el.text) for el in root.findall("produkttyp")]
-        lastps  = [int(el.text) for el in root.findall("lastp")]
-        lastws  = [int(el.text) for el in root.findall("lastw")]
-        maxws   = [int(el.text) for el in root.findall("maxw")]
-        minws   = [int(el.text) for el in root.findall("minw")]
-        winakts = [int(el.text) for el in root.findall("winakt")]
+        names   = response.get("kanalname", [])
+        types   = response.get("produkttyp", [])
+        lastps  = response.get("lastp", [])
+        lastws  = response.get("lastw", [])
+        maxws   = response.get("maxw", [])
+        minws   = response.get("minw", [])
+        winakts = response.get("winakt", [])
         count = min(4, max(len(names), len(types), len(lastps), len(lastws)))
         channels: List[ChannelInfo] = []
         for i in range(count):
@@ -196,33 +255,29 @@ class WebControlClient:
         return all_channels
 
     def query_sommer_winter_aktiv(self) -> str:
-        root = self._send([self.TEL_SOMMER_WINTER_AKTIV])
-        rid_el = root.find("responseID")
-        if rid_el is not None and int(rid_el.text) == self.RES_SOMMER_WINTER_AKTIV:
-            winter_el = root.find("winterakt")
-            self.sommer_winter_aktiv = int(winter_el.text) if winter_el is not None else None
-        return ET.tostring(root, encoding='unicode')
+        response = self._send([self.TEL_SOMMER_WINTER_AKTIV])
+        if response.get("ok") and response.get("responseID") == self.RES_SOMMER_WINTER_AKTIV:
+            winter = response.get("winterakt")
+            self.sommer_winter_aktiv = winter if winter is not None else None
+        return response
 
     def check_clima_data(self) -> str:
-        root = self._send([self.TEL_CHECK_CLIMA_DATA])
-        rid_el = root.find("responseID")
-        if rid_el is not None and int(rid_el.text) == self.RES_CHECK_CLIMA_DATA:
-            erfolg_el = root.find("erfolg")
-            self.clima_check_erfolg = int(erfolg_el.text) if erfolg_el is not None else None
-        return ET.tostring(root, encoding='unicode')
+        response = self._send([self.TEL_CHECK_CLIMA_DATA])
+        if response.get("ok") and response.get("responseID") == self.RES_CHECK_CLIMA_DATA:
+            erfolg = response.get("erfolg")
+            self.clima_check_erfolg = erfolg if erfolg is not None else None
+        return response
 
     def load_rooms_matrix(self, max_rooms: int = DEF_MAXRAUM) -> Dict[int, Tuple[int,int]]:
         mapping: Dict[int, Tuple[int,int]] = {}
         for r in range(0, max_rooms):
-            root = self._send([self.TEL_RAUM_ABFRAGEN, r])
-            rid_el = root.find("responseID")
-            if rid_el is None or int(rid_el.text) != self.RES_RAUM_ABFRAGEN:
+            response = self._send([self.TEL_RAUM_ABFRAGEN, r])
+            if not response.get("ok") and response.get("responseID") != self.RES_RAUM_ABFRAGEN:
                 break
-            raumname_el = root.find("raumname")
-            raumname = (raumname_el.text or "").strip() if raumname_el is not None else ""
-            if raumname == "":
+            raumname = response.get("raumname", "")
+            if raumname is None or "":
                 break
-            clis = [int(el.text) for el in root.findall("clikanalindex")]
+            clis = response.findall("clikanalindex") or
             for k, cli in enumerate(clis[:self.DEF_MAXKANAL]):
                 if cli != 255:  # gültig
                     mapping[cli] = (r, k)
@@ -255,36 +310,30 @@ class WebControlClient:
     
     # ---------- Polling ----------
     def poll(self, raumindex: int, kanalindex: int) -> Optional[Dict[str,int]]:
-        root = self._send([self.TEL_POLLING, raumindex, kanalindex, 0])
-        rid_el = root.find("responseID")
-        if rid_el is None or int(rid_el.text) != self.RES_POLLING:
+        response = self._send([self.TEL_POLLING, raumindex, kanalindex, 0])
+        if not response.get("ok") and response.get("responseID") != self.RES_POLLING:
             return None
-        def _int(tag):
-            el = root.find(tag)
-            return int(el.text) if el is not None and el.text is not None else None
+
         st = {
-            "raumindex": _int("raumindex"),
-            "kanalindex": _int("kanalindex"),
-            "lastp": _int("lastp"),
-            "lastw": _int("lastw")
+            "raumindex": response.get("raumindex"),
+            "kanalindex": response.get("kanalindex"),
+            "lastp": response.get("lastp"),
+            "lastw": response.get("lastw")
         }
         self.state_cache[(raumindex, kanalindex)] = st
         return st
 
     # ---------- Auslöser ----------
     def read_ausloeser(self, raumindex: int, kanalindex: int, cli_index: int) -> Optional[Dict[str,int]]:
-        root = self._send([self.TEL_AUSLOESER, raumindex, kanalindex, cli_index])
-        rid_el = root.find("responseID")
-        if rid_el is None or int(rid_el.text) != self.RES_AUSLOESER:
+        response = self._send([self.TEL_AUSLOESER, raumindex, kanalindex, cli_index])
+        if not response.get("ok") and response.get("responseID") != self.RES_AUSLOESER:
             return None
-        def _int(tag):
-            el = root.find(tag)
-            return int(el.text) if el is not None and el.text is not None else None
+        
         data = {
-            "raumindex": _int("raumindex"),
-            "kanalindex": _int("kanalindex"),
-            "clikanidx": _int("clikanidx"),
-            "cliausl": _int("cliausl")
+            "raumindex": response.get("raumindex"),
+            "kanalindex": response.get("kanalindex"),
+            "clikanidx": response.get("clikanidx"),
+            "cliausl": response.get("cliausl")
         }
         self.cause_cache[cli_index] = data
         return data
@@ -295,8 +344,8 @@ class WebControlClient:
             winkel = (65535 + winkel + 1)
         hi = (winkel - (winkel % 256)) // 256
         lo = winkel % 256
-        root = self._send([self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo])
-        return ET.tostring(root, encoding='unicode')
+        response = self._send([self.TEL_KANALBEDIENUNG, raumindex, kanalindex, fc, pos, hi, lo])
+        return response
 
     def cover_set_position(self, ch: ChannelInfo, percent: int) -> str:
         if ch.raumindex is not None and ch.kanalindex is not None:
@@ -327,17 +376,15 @@ class WebControlClient:
     # Switches (global): Abwesend & Automatik
     def set_abwesend(self, enabled: bool) -> Optional[bool]:
         # Annahme: TEL_ABWESEND mit Parameter 1/0
-        root = self._send([self.TEL_ABWESEND, 1 if enabled else 0])
-        rid_el = root.find("responseID")
-        if rid_el is not None and int(rid_el.text) == self.RES_ABWESEND:
+        response = self._send([self.TEL_ABWESEND, 1 if enabled else 0])
+        if response.get("ok") and response.get("responseID") == self.RES_ABWESEND:
             self.abwesend = enabled
             return self.abwesend
         return None
 
     def set_automatik(self, enabled: bool) -> Optional[bool]:
-        root = self._send([self.TEL_AUTOMATIK, 1 if enabled else 0])
-        rid_el = root.find("responseID")
-        if rid_el is not None and int(rid_el.text) == self.RES_AUTOMATIK:
+        response = self._send([self.TEL_AUTOMATIK, 1 if enabled else 0])
+        if response.get("ok") and response.get("responseID") == self.RES_AUTOMATIK:
             self.automatik = enabled
             return self.automatik
         return None
