@@ -111,18 +111,16 @@ class WebControlClient:
         except ET.ParseError as e:
             return {"ok": False, "error": f"xml_parse_error: {e}"}
 
-        def get_tag(*names: str) -> str | dict | None:
+        def get_tag(*names: str) -> str | list | None:
             for n in names:
-                el = root.findall(n)
-                if el is not None and el is dict:
-                    ed = []
-                    for e in el:
-                        if e is not None and e.text is not None:
-                            ed.append(e.text.strip())
-                    return ed
-                if el is not None and el.text is not None:
-                    return el.text.strip()
-            return None
+                el = root.findall(n)                                
+                ed = []                                           
+                for e in el:                          
+                    if e is not None and e.text is not None:              
+                        ed.append(e.text.strip())   
+                if ed is not None:               
+                    return ed if len(ed) != 1 else ed[0]                      
+            return None                                     
         
         xml_tags = {"responseID", 
                     "befehlszaehler", 
@@ -132,7 +130,7 @@ class WebControlClient:
                     "kanalindex", 
                     "lastp", 
                     "lastw", 
-                    "raumname"
+                    "raumname",
                     "clikanalindex",
                     "cliausl",
                     "erfolg",
@@ -144,27 +142,30 @@ class WebControlClient:
                     "kanalname",
                     "winakt"}        
         
-        result = {"ok": True}
+        result = {"ok": True }
 
         for xml_tag in xml_tags:
             tag = get_tag(xml_tag)
             if tag is not None:
-                if xml_tag in {"kanalname", "raumname"}:
-                    result.setdefault(xml_tag).append(tag)
-                else:
-                    if tag is dict:
-                        for t in tag:
-                            try:
-                                result.setdefault(xml_tag, []).append(int(t))
-                            except Exception:
-                                result.setdefault(xml_tag, []).append(None)
-                    else:
+                if isinstance(tag, list):
+                    for t in tag:
                         try:
-                            result.setdefault(xml_tag).append(int(tag))
+                            if xml_tag not in {"kanalname", "raumname"}:
+                                result.setdefault(xml_tag, []).append(int(t))
+                            else:
+                                result.setdefault(xml_tag, []).append(t.strip())
                         except Exception:
-                            result.setdefault(xml_tag).append(None)
+                            result.setdefault(xml_tag, []).append(None)
+                else:
+                    try:
+                        if xml_tag not in {"kanalname", "raumname"}:
+                            result[xml_tag] = int(tag)
+                        else:
+                            result[xml_tag] = tag.strip()
+                    except Exception:
+                        result[xml_tag] = None
             else:
-                result.setdefault(xml_tag).append(None)
+                result[xml_tag] = None
         
         if result.get("responseID") is None:
             result["ok"] = False
@@ -229,7 +230,7 @@ class WebControlClient:
 
     def query_clima_block(self, start_index: int) -> List[ChannelInfo]:
         (response, cnt) = self._send([self.TEL_CLIMATRONIC_KANAL_ABFRAGEN, start_index])
-        if not response.get("ok") or response.get("responseID") == self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
+        if not response.get("ok") or response.get("responseID") != self.RES_CLIMATRONIC_KANAL_ABFRAGEN:
             return []
         names   = response.get("kanalname", [])
         types   = response.get("produkttyp", [])
@@ -281,14 +282,14 @@ class WebControlClient:
         mapping: Dict[int, Tuple[int,int]] = {}
         for r in range(0, max_rooms):
             (response, cnt) = self._send([self.TEL_RAUM_ABFRAGEN, r])
-            if not response.get("ok") and response.get("responseID") != self.RES_RAUM_ABFRAGEN:
+            if not response.get("ok") or response.get("responseID") != self.RES_RAUM_ABFRAGEN:
                 break
             raumname = response.get("raumname", "")
-            if raumname is None or "":
+            if not raumname:
                 break
-            clis = response.findall("clikanalindex") or
+            clis = response.get("clikanalindex", [])
             for k, cli in enumerate(clis[:self.DEF_MAXKANAL]):
-                if cli != 255:  # gültig
+                if cli != self.TYPE_INVALID:  # gültig
                     mapping[cli] = (r, k)
         return mapping
 
