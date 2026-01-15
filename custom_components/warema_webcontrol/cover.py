@@ -1,5 +1,5 @@
 from __future__ import annotations
-from homeassistant.components.cover import CoverEntity, CoverEntityFeature
+from homeassistant.components.cover import CoverEntity, CoverDeviceClass, CoverEntityFeature, ATTR_POSITION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -27,6 +27,9 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, "webcontrol")}, name="Warema WebControl"
         )
+        self._attr_supported_features = (
+            CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE |
+            CoverEntityFeature.STOP | CoverEntityFeature.SET_POSITION)
         self._last_cause = None  # cliausl Code
 
         self._last_triggered = None
@@ -34,25 +37,39 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         self._last_direction = None
 
 
+    def _to_ha_open_percent(self, closed_percent: int | None) -> int | None:
+        """Gateway value (0=open, 100=closed) -> HA open% (0=closed, 100=open)."""
+        if closed_percent is None:
+            return None
+        return max(0, min(100, 100 - int(closed_percent)))
+
+    def _from_ha_open_percent(self, ha_open_percent: int | None) -> int | None:
+        """HA open% -> Gateway closed%."""
+        if ha_open_percent is None:
+            return None
+        return max(0, min(100, 100 - int(ha_open_percent)))
+
 
     def open_cover(self, **kwargs):
-        self._direction = "opening"
-        self._is_moving = True
-        self._last_command = "open"
-        self._push_history(self._direction)
-        self.schedule_update_ha_state()
-        self._client.cover_open(self._ch)
+        #self._direction = "opening"
+        #self._is_moving = True
+        #self._last_command = "open"
+        #self._push_history(self._direction)
+        #self.schedule_update_ha_state()
+        #self._client.cover_open(self._ch)
+        self.set_cover_position(position=100, direction="opening", last_command="open")
 
     def close_cover(self, **kwargs):
-        self._direction = "closing"
-        self._is_moving = True
-        self._last_command = "close"
-        self._push_history()
-        self.schedule_update_ha_state()
-        self._client.cover_close(self._ch)
+        #self._direction = "closing"
+        #self._is_moving = True
+        #self._last_command = "close"
+        #self._push_history()
+        #self.schedule_update_ha_state()
+        #self._client.cover_close(self._ch)
+        self.set_cover_position(position=100, direction="opening", last_command="open")
 
     def stop_cover(self, **kwargs):
-        self._direction = "closing"
+        #self._direction = "closing"
         self._is_moving = False
         self._last_command = "stop"
         self._push_history()
@@ -61,13 +78,20 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
 
     def set_cover_position(self, **kwargs):
         pos = kwargs.get("position")
+        arg_direction = kwargs.get("direction")
+        arg_last_command = kwargs.get("last_command")
+        inverted_pos = self._from_ha_open_percent(pos)
         self._direction = "closing" if pos > self._position else "opening"
         self._is_moving = True
-        self._last_command = f"set_position {pos}"
+        self._last_command = f"set_position {inverted_pos}"
+        if arg_direction:
+            self._direction = arg_direction
+        if arg_last_command:
+            self._last_command = arg_last_command
         self._push_history()
         self.schedule_update_ha_state()
-        if pos is not None:
-            self._client.cover_set_position(self._ch, int(pos))
+        if inverted_pos is not None:
+            self._client.cover_set_position(self._ch, int(inverted_pos))
             self._position = int(pos)
 
 
@@ -78,13 +102,14 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
     
     @property
     def current_cover_position(self):
-        # Aus coordinator.data lesen (State‑Cache: {(raum, kanal): {...}})
+        # Retrieve from coordinator state cache (State‑Cache: {(raum, kanal): {...}})
         data = self.coordinator.data or {}
         key = (self._ch.raumindex, self._ch.kanalindex)
         st = data.get(key)
         if st and st.get("lastp") is not None:
-            self._position = int(st["lastp"] // 2)  # 0..200 -> 0..100
-        # Auslöser (optional, falls vorher gelesen)
+            inverted_pos = self._to_ha_open_percent(int(st["lastp"] // 2))
+            self._position = inverted_pos  # 0..200 -> 0..100
+        # Trigger (optional)
         cause = self._client.cause_cache.get(self._ch.cli_index)
         if cause:
             self._last_cause = cause.get("cliausl")
