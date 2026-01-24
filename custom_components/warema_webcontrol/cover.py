@@ -66,7 +66,7 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         #self._push_history()
         #self.schedule_update_ha_state()
         #self._client.cover_close(self._ch)
-        self.set_cover_position(position=100, direction="opening", last_command="open")
+        self.set_cover_position(position=0, direction="closing", last_command="close")
 
     def stop_cover(self, **kwargs):
         #self._direction = "closing"
@@ -81,18 +81,21 @@ class WebControlCover(CoordinatorEntity, CoverEntity):
         arg_direction = kwargs.get("direction")
         arg_last_command = kwargs.get("last_command")
         inverted_pos = self._from_ha_open_percent(pos)
-        self._direction = "closing" if pos > self._position else "opening"
-        self._is_moving = True
-        self._last_command = f"set_position {inverted_pos}"
-        if arg_direction:
-            self._direction = arg_direction
-        if arg_last_command:
-            self._last_command = arg_last_command
-        self._push_history()
-        self.schedule_update_ha_state()
         if inverted_pos is not None:
-            self._client.cover_set_position(self._ch, int(inverted_pos))
+            self._direction = "closing" if self._position is not None and pos < self._position else "opening"
+            self._is_moving = True
+            self._last_command = f"set_position {inverted_pos}"
+            if arg_direction:
+                self._direction = arg_direction
+            if arg_last_command:
+                self._last_command = arg_last_command
+            self._push_history()
+            self.schedule_update_ha_state()
+            response = self._client.cover_set_position(self._ch, int(inverted_pos))
             self._position = int(pos)
+            if response.get("ok"):
+                self._is_moving = False
+                self.schedule_update_ha_state()
 
 
     def _push_history(self) -> None:
